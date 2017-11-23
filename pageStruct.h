@@ -5,5 +5,5 @@
  */
 typedef struct pageStruct{
 	int size;
-	int pages[32];
+	int pages[32];  //1 or 0 if page is in system memory
 }pageStruct;
