@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
- * Date: November 23rd, 2017
- * Log: Adding more semaphores
+ * Date: November 24th, 2017
+ * Log: Reading from message array
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,7 +74,9 @@ bool checkBit(int bitArray[], int i){
 }
 //===================================Functions to handle bits
 
-void checkMessages();
+void checkMessages(int*, int*, FILE*, pStruct*);
+
+void printMemMap(FILE*);
 
 int main(int argc, char* argv[]){
 
@@ -92,6 +94,7 @@ int main(int argc, char* argv[]){
 	int frameArray[30][32];
 	bool verbose = false;
 	int lastForkTime[2];
+	int lastSecond;
 	int processIndex = 0;
 	int totalProcessNum = 0;
 	//=====================LOCAL VARIABLES
@@ -170,7 +173,7 @@ int main(int argc, char* argv[]){
 
 	int clockVal = 0;
 	int messageVal = -1;
-	for(i = 0; i < 3; i++){
+	for(i = 0; i < 4; i++){
 		if(i != 2){
 			memcpy(&clock[i], &clockVal, 4);
 		}
@@ -193,6 +196,7 @@ int main(int argc, char* argv[]){
 
 	lastForkTime[0] = clock[0];
 	lastForkTime[1] = clock[1];
+	lastSecond = clock[0];
 	pid_t childpid;
 	srand(time(NULL));
 
@@ -247,7 +251,12 @@ int main(int argc, char* argv[]){
 				}
 			}
 		}
-		checkMessages();
+		checkMessages(shmMsg, clock, file, pBlock);
+	
+		if(clock[0] > lastSecond){
+			lastSecond = clock[0];
+			printMemMap(file);
+		}
 	}
 
 	sleep(5);
@@ -257,4 +266,50 @@ int main(int argc, char* argv[]){
 	return 0;
 }
 
-void checkMessages(){}
+void checkMessages(int *shmMsg, int *clock, FILE* file, pStruct *pBlock){
+
+	if(shmMsg[1] == 0){ //read
+		//if no page fault--------
+		if(clock[1] + 10 > 1000000000){
+			clock[1] = (clock[1] + 10) % 1000000000;
+			clock[0]++;
+		}else{
+			clock[1] += 10;
+		}
+		shmMsg[0] = -1;
+		shmMsg[1] = -1;
+		shmMsg[2] = -1;
+		sb.sem_num = shmMsg[0];
+		semop(sharedmem[4], &sb, 1);
+		//------------------------
+	}else if(shmMsg[1] == 1){ //write
+		//if no page fault---------------
+		if(clock[1] + 10 > 1000000000){
+			clock[1] = (clock[1] + 10) % 1000000000;
+			clock[0]++;
+		}else{
+			clock[1] += 10;
+		}
+		shmMsg[0] = -1;
+		shmMsg[1] = -1;
+		shmMsg[2] = -1;
+		sb.sem_num = shmMsg[0];
+		semop(sharedmem[4], &sb, 1);
+		//-----------------------
+	}else if(shmMsg[1] == 2){ //terminate
+		fprintf(file, "Master has acknowledged P%d is terminating.\n", shmMsg[0]); //TODO: output memory access time
+		kill(pBlock[shmMsg[0]].pid, SIGKILL);
+		waitpid(pBlock[shmMsg[0]].pid, NULL, 0);
+		shmMsg[0] = -1;
+		shmMsg[1] = -1;
+		shmMsg[2] = -1;
+		sb.sem_num = shmMsg[0];
+		semop(sharedmem[4], &sb, 1);
+	}else{
+
+	}
+
+	return;
+}
+
+void printMemMap(FILE* file){}

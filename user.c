@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
- * Date: November 23rd, 2017
- * Log: Adding more semaphores 
+ * Date: November 24th, 2017
+ * Log: Sending info to oss through message array
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +26,7 @@ int main(int argc, char* argv[]){
 	pageStruct* pageTable;
 	srand(time(NULL) ^ (getpid()<<16));
 	int index = atoi(argv[1]);
+	int pid = atoi(argv[2]);
 	int i;
 	int randFrameValue = rand() % 32;
 	int frame = 0; 
@@ -73,6 +74,7 @@ int main(int argc, char* argv[]){
 	semop(semid, &sb, 1);
 	shmMsg[0] = index;
 	shmMsg[1] = 2; //terminate
+	shmMsg[2] = frame;
 	
 	exit(0);
 }
