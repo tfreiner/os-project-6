@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
  * Date: November 24th, 2017
- * Log: Sending info to oss through message array
+ * Log: Starting page fault implementation 
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,11 +64,13 @@ int main(int argc, char* argv[]){
 			shmMsg[0] = index;
 			shmMsg[1] = 0; //read
 			shmMsg[2] = frame;
+			memoryReferences++;
 		}else{
 			semop(semid, &sb, 1);
 			shmMsg[0] = index;
 			shmMsg[1] = 1; //write
 			shmMsg[2] = frame;
+			memoryReferences++;
 		}
 	}
 	semop(semid, &sb, 1);

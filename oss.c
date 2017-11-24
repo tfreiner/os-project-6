@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
  * Date: November 24th, 2017
- * Log: Reading from message array
+ * Log: Starting page fault implementation 
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,7 +74,7 @@ bool checkBit(int bitArray[], int i){
 }
 //===================================Functions to handle bits
 
-void checkMessages(int*, int*, FILE*, pStruct*);
+void checkMessages(int*, int*, FILE*, pStruct*, int[256][2]);
 
 void printMemMap(FILE*);
 
@@ -87,7 +87,7 @@ int main(int argc, char* argv[]){
 	int bitProcessArray[1] = { 0 };
 	int bitFrameArray[8] = { 0 };
 	int bitFrameArray2[8] = { 0 };
-	int sysMem[256][2];
+	int sysMem[256][2]; //stores page table and page
 	pageStruct* pageTable;
 	pStruct* pBlock;
 	bool tableFull = 0;
@@ -97,6 +97,10 @@ int main(int argc, char* argv[]){
 	int lastSecond;
 	int processIndex = 0;
 	int totalProcessNum = 0;
+	for(i = 0; i < 256; i++){
+		sysMem[i][0] = -1;
+		sysMem[i][1] = -1;
+	}
 	//=====================LOCAL VARIABLES
 
 	//SIGNAL HANDLING
@@ -251,7 +255,7 @@ int main(int argc, char* argv[]){
 				}
 			}
 		}
-		checkMessages(shmMsg, clock, file, pBlock);
+		checkMessages(shmMsg, clock, file, pBlock, sysMem);
 	
 		if(clock[0] > lastSecond){
 			lastSecond = clock[0];
@@ -266,36 +270,47 @@ int main(int argc, char* argv[]){
 	return 0;
 }
 
-void checkMessages(int *shmMsg, int *clock, FILE* file, pStruct *pBlock){
-
+void checkMessages(int *shmMsg, int *clock, FILE* file, pStruct *pBlock, int sysMem[256][2]){
+	int i;
+	bool pageFault = false;
+	for(i = 0; i < 256; i++){
+		if(sysMem[i][0] == shmMsg[0] && sysMem[i][1] == shmMsg[2]){ //change these shmMsg values
+			break;
+		}
+		pageFault = true;
+	}
 	if(shmMsg[1] == 0){ //read
-		//if no page fault--------
-		if(clock[1] + 10 > 1000000000){
-			clock[1] = (clock[1] + 10) % 1000000000;
-			clock[0]++;
+		if(!pageFault){
+			if(clock[1] + 10 > 1000000000){
+				clock[1] = (clock[1] + 10) % 1000000000;
+				clock[0]++;
+			}else{
+				clock[1] += 10;
+			}
+			shmMsg[0] = -1;
+			shmMsg[1] = -1;
+			shmMsg[2] = -1;
+			sb.sem_num = shmMsg[0];
+			semop(sharedmem[4], &sb, 1);
 		}else{
-			clock[1] += 10;
+
 		}
-		shmMsg[0] = -1;
-		shmMsg[1] = -1;
-		shmMsg[2] = -1;
-		sb.sem_num = shmMsg[0];
-		semop(sharedmem[4], &sb, 1);
-		//------------------------
 	}else if(shmMsg[1] == 1){ //write
-		//if no page fault---------------
-		if(clock[1] + 10 > 1000000000){
-			clock[1] = (clock[1] + 10) % 1000000000;
-			clock[0]++;
+		if(!pageFault){
+			if(clock[1] + 10 > 1000000000){
+				clock[1] = (clock[1] + 10) % 1000000000;
+				clock[0]++;
+			}else{
+				clock[1] += 10;
+			}
+			shmMsg[0] = -1;
+			shmMsg[1] = -1;
+			shmMsg[2] = -1;
+			sb.sem_num = shmMsg[0];
+			semop(sharedmem[4], &sb, 1);
 		}else{
-			clock[1] += 10;
+
 		}
-		shmMsg[0] = -1;
-		shmMsg[1] = -1;
-		shmMsg[2] = -1;
-		sb.sem_num = shmMsg[0];
-		semop(sharedmem[4], &sb, 1);
-		//-----------------------
 	}else if(shmMsg[1] == 2){ //terminate
 		fprintf(file, "Master has acknowledged P%d is terminating.\n", shmMsg[0]); //TODO: output memory access time
 		kill(pBlock[shmMsg[0]].pid, SIGKILL);
