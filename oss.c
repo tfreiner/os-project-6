@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
- * Date: November 24th, 2017
- * Log: Starting page fault implementation 
+ * Date: November 25th, 2017
+ * Log: Adding shared message queue
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,13 +34,52 @@ int processIds[10000];
 int globalProcessCount = 0;
 int lineCount = 0;
 int processCount = 0;
-int clearProcess[18];
+int clearProcess[MAX_PROCESSES];
+int queue[MAX_PROCESSES][3];
+int queueCount = 0;
+int front = 0;
+int back = -1;
+bool verbose = false;
 //==================GLOBAL VARIABLES
 
 //Semaphore union
 union semun{
 	int val;
 };
+
+bool isQueueFull(){
+	return queueCount == MAX_PROCESSES;
+}
+
+bool isQueueEmpty(){
+	return queueCount == 0;
+}
+
+int* peek(){
+	return queue[front];
+}
+
+void insert(int index, int page, int request){
+	if(!isQueueFull()){
+		if(back == 17)
+			back = -1;
+		queue[++back][0] = index;
+		queue[back][1] = page;
+		queue[back][2] = request;
+		queueCount++;
+	}
+}
+
+void delete(){
+	if(!isQueueEmpty()){
+		queue[front++][0] = -1;
+		queue[front][1] = -1;
+		queue[front][2] = -1;
+		if(front == 18)
+			front = 0;
+		queueCount--;
+	}
+}
 
 //Cleans all shared memory on exit
 void clean(int sig){
@@ -50,7 +89,6 @@ void clean(int sig){
 		fprintf(stderr, "Program reached 2 seconds. Removing shared memory and killing processes.\n");	
 	else if(sig == 11)
 		fprintf(stderr, "Seg fault caught. Removing shared memory and killing processes. Please re-run program.\n");
-	
 	shmctl(sharedmem[0], IPC_RMID, NULL);
 	shmctl(sharedmem[1], IPC_RMID, NULL);
 	shmctl(sharedmem[2], IPC_RMID, NULL);
@@ -74,9 +112,9 @@ bool checkBit(int bitArray[], int i){
 }
 //===================================Functions to handle bits
 
-void checkMessages(int*, int*, FILE*, pStruct*, int[256][2]);
+void checkMessages(int (*)[19], int*, FILE*, pStruct*, int[256][2]);
 
-void printMemMap(FILE*);
+void printMemMap(FILE*, int*, int*);
 
 int main(int argc, char* argv[]){
 
@@ -92,7 +130,6 @@ int main(int argc, char* argv[]){
 	pStruct* pBlock;
 	bool tableFull = 0;
 	int frameArray[30][32];
-	bool verbose = false;
 	int lastForkTime[2];
 	int lastSecond;
 	int processIndex = 0;
@@ -100,6 +137,11 @@ int main(int argc, char* argv[]){
 	for(i = 0; i < 256; i++){
 		sysMem[i][0] = -1;
 		sysMem[i][1] = -1;
+	}
+	for(i = 0; i < 18; i++){
+		queue[i][0] = -1;
+		queue[i][1] = -1;
+		queue[i][2] = -1;
 	}
 	//=====================LOCAL VARIABLES
 
@@ -150,15 +192,14 @@ int main(int argc, char* argv[]){
 
 	int memid = shmget(key, sizeof(int*)*2, IPC_CREAT | 0644);
 	int memid2 = shmget(key2, sizeof(struct pageStruct) * 30, IPC_CREAT | 0644);
-	int memid3 = shmget(key3, sizeof(int*)*3, IPC_CREAT | 0644);
+	int memid3 = shmget(key3, sizeof(int*)*3*19, IPC_CREAT | 0644);
 	int memid4 = shmget(key4, sizeof(struct pStruct) * MAX_PROCESSES, IPC_CREAT | 0644);
-	int semid = semget(key5, 18, IPC_CREAT | 0644);
+	int semid = semget(key5, 19, IPC_CREAT | 0644);
 
-	if(memid == -1 || memid2 == -1 || memid3 == -1 || memid4 == -1){
+	if(memid == -1 || memid2 == -1 || memid3 == -1 || memid4 == -1 || semid == -1){
 		fprintf(stderr, "%s: ", argv[0]);
 		perror("Error: \n");
 	}
-
 	sharedmem[0] = memid;
 	sharedmem[1] = memid2;
 	sharedmem[2] = memid3;
@@ -166,30 +207,34 @@ int main(int argc, char* argv[]){
 	sharedmem[4] = semid;
 	int *clock = (int *)shmat(memid, NULL, 0);
 	pageTable = (struct pageStruct *)shmat(memid2, NULL, 0);
-	int *shmMsg = (int *)shmat(memid3, NULL, 0);
+	int (*shmMsg)[19] = shmat(memid3, NULL, 0);
 	pBlock = (struct pStruct *)shmat(memid4, NULL, 0);
 
-	if(*clock == -1 || (int*)pageTable == (int*)-1 || *shmMsg == -1 || (int*)pBlock == (int*)-1){
+	if(*clock == -1 || (int*)pageTable == (int*)-1 || *shmMsg == (int*)-1 || (int*)pBlock == (int*)-1){
 		fprintf(stderr, "%s: ", argv[0]);
 		perror("Error: \n");
 		clean(1);
 	}
-
 	int clockVal = 0;
 	int messageVal = -1;
-	for(i = 0; i < 4; i++){
+	int queueFrontVal = 0;
+	for(i = 0; i < 18; i++){
 		if(i != 2){
 			memcpy(&clock[i], &clockVal, 4);
 		}
-		memcpy(&shmMsg[i], &messageVal, 4);
+		memcpy(&shmMsg[i][0], &messageVal, 4);
+		memcpy(&shmMsg[i][1], &messageVal, 4);
+		memcpy(&shmMsg[i][2], &messageVal, 4);
 	}
-	
-	semctl(semid, 17, SETVAL, 1, arg);
+	memcpy(&shmMsg[18][0], &queueFrontVal, 4);
+	memcpy(&shmMsg[18][1], &messageVal, 4);
+	memcpy(&shmMsg[18][2], &queueFrontVal, 4);
+	semctl(semid, 18, SETVAL, 1, arg);
 	sb.sem_op = 1;
 	sb.sem_num = 17;
 	sb.sem_flg = 0;
-
-	for(sb.sem_num = 0; sb.sem_num < 17; sb.sem_num++)
+	
+	for(sb.sem_num = 0; sb.sem_num < 19; sb.sem_num++)
 		semop(semid, &sb, 1);
 
 	if(errno){
@@ -203,7 +248,7 @@ int main(int argc, char* argv[]){
 	lastSecond = clock[0];
 	pid_t childpid;
 	srand(time(NULL));
-
+	
 	while(1){
 		if(processCount == MAX_PROCESSES){
 			for(i = 0; i < MAX_PROCESSES; i++){
@@ -219,7 +264,7 @@ int main(int argc, char* argv[]){
 				}
 			}
 		}
-		if((clock[0] - lastForkTime[0]) >= 1 || (clock[0] == lastForkTime[0] && clock[1] - lastForkTime[1] > 500000000)){
+//		if((clock[0] - lastForkTime[0]) >= 1 || (clock[0] == lastForkTime[0] && clock[1] - lastForkTime[1] > 500000000)){
 			lastForkTime[0] = clock[0];
 			lastForkTime[1] = clock[1];
 			for(i = 0; i < MAX_PROCESSES; i++){
@@ -232,7 +277,6 @@ int main(int argc, char* argv[]){
 			}
 			if(!tableFull){
 				childpid = fork();
-				
 				if(errno){
 					fprintf(stderr, "%s", strerror(errno));
 					clean(1);
@@ -254,32 +298,32 @@ int main(int argc, char* argv[]){
 					exit(1);
 				}
 			}
-		}
+//		}
 		checkMessages(shmMsg, clock, file, pBlock, sysMem);
 	
 		if(clock[0] > lastSecond){
 			lastSecond = clock[0];
-			printMemMap(file);
+			printMemMap(file, bitFrameArray, bitFrameArray2);
 		}
 	}
 
-	sleep(5);
+	sleep(10);
 	fclose(file);
 	clean(1);
 	
 	return 0;
 }
 
-void checkMessages(int *shmMsg, int *clock, FILE* file, pStruct *pBlock, int sysMem[256][2]){
+void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, int sysMem[256][2]){
 	int i;
 	bool pageFault = false;
 	for(i = 0; i < 256; i++){
-		if(sysMem[i][0] == shmMsg[0] && sysMem[i][1] == shmMsg[2]){ //change these shmMsg values
+		if(sysMem[i][0] == shmMsg[0][0] && sysMem[i][1] == shmMsg[0][2]){
 			break;
 		}
 		pageFault = true;
 	}
-	if(shmMsg[1] == 0){ //read
+	if(shmMsg[0][1] == 0){ //read
 		if(!pageFault){
 			if(clock[1] + 10 > 1000000000){
 				clock[1] = (clock[1] + 10) % 1000000000;
@@ -287,15 +331,18 @@ void checkMessages(int *shmMsg, int *clock, FILE* file, pStruct *pBlock, int sys
 			}else{
 				clock[1] += 10;
 			}
-			shmMsg[0] = -1;
-			shmMsg[1] = -1;
-			shmMsg[2] = -1;
-			sb.sem_num = shmMsg[0];
+			if(verbose)
+				fprintf(file, "P%d is reading from page %d\n", shmMsg[0][0], shmMsg[0][2]);
+			shmMsg[0][0] = -1;
+			shmMsg[0][1] = -1;
+			shmMsg[0][2] = -1;
+			sb.sem_num = shmMsg[0][0];
 			semop(sharedmem[4], &sb, 1);
 		}else{
-
+			insert(shmMsg[0][0], shmMsg[0][2], 0);
 		}
-	}else if(shmMsg[1] == 1){ //write
+	}else if(shmMsg[0][1] == 1){ //write
+		printf("WRITE\n");
 		if(!pageFault){
 			if(clock[1] + 10 > 1000000000){
 				clock[1] = (clock[1] + 10) % 1000000000;
@@ -303,28 +350,42 @@ void checkMessages(int *shmMsg, int *clock, FILE* file, pStruct *pBlock, int sys
 			}else{
 				clock[1] += 10;
 			}
-			shmMsg[0] = -1;
-			shmMsg[1] = -1;
-			shmMsg[2] = -1;
-			sb.sem_num = shmMsg[0];
+			if(verbose)
+				fprintf(file, "P%d is writing to page %d\n", shmMsg[0][0], shmMsg[0][2]);
+			shmMsg[0][0] = -1;
+			shmMsg[0][1] = -1;
+			shmMsg[0][2] = -1;
+			sb.sem_num = shmMsg[0][0];
 			semop(sharedmem[4], &sb, 1);
 		}else{
-
+			insert(shmMsg[0][0], shmMsg[0][2], 1);
 		}
-	}else if(shmMsg[1] == 2){ //terminate
-		fprintf(file, "Master has acknowledged P%d is terminating.\n", shmMsg[0]); //TODO: output memory access time
-		kill(pBlock[shmMsg[0]].pid, SIGKILL);
-		waitpid(pBlock[shmMsg[0]].pid, NULL, 0);
-		shmMsg[0] = -1;
-		shmMsg[1] = -1;
-		shmMsg[2] = -1;
-		sb.sem_num = shmMsg[0];
+	}else if(shmMsg[0][1] == 2){ //terminate
+		printf("TERMINATE\n");
+		fprintf(file, "Master has acknowledged P%d is terminating.\n", shmMsg[0][0]); //TODO: output memory access time
+		kill(pBlock[shmMsg[0][0]].pid, SIGKILL);
+		waitpid(pBlock[shmMsg[0][0]].pid, NULL, 0);
+		shmMsg[0][0] = -1;
+		shmMsg[0][1] = -1;
+		shmMsg[0][2] = -1;
+		sb.sem_num = shmMsg[0][0];
 		semop(sharedmem[4], &sb, 1);
-	}else{
-
 	}
 
 	return;
 }
 
-void printMemMap(FILE* file){}
+void printMemMap(FILE* file, int* bitFrameArray, int* bitFrameArray2){
+	int i;
+	for(i = 0; i < 256; i++){
+		if(bitFrameArray[i] == 0)
+			fprintf(file, "U");
+		else
+			fprintf(file, "D");
+	}
+	fprintf(file, "\n");
+	for(i = 0; i < 256; i++){	
+		fprintf(file, "%d", bitFrameArray2[i]);
+	}
+	return;
+}
