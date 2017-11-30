@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
- * Date: November 25th, 2017
- * Log: Adding shared message queue
+ * Date: November 30th, 2017
+ * Log: Fixing bugs
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +32,6 @@ struct sembuf sb;
 int sharedmem[5];
 int processIds[10000];
 int globalProcessCount = 0;
-int lineCount = 0;
 int processCount = 0;
 int clearProcess[MAX_PROCESSES];
 int queue[MAX_PROCESSES][3];
@@ -40,6 +39,8 @@ int queueCount = 0;
 int front = 0;
 int back = -1;
 bool verbose = false;
+int lineCount = 0;
+int lastRequest[3];
 //==================GLOBAL VARIABLES
 
 //Semaphore union
@@ -112,7 +113,9 @@ bool checkBit(int bitArray[], int i){
 }
 //===================================Functions to handle bits
 
-void checkMessages(int (*)[19], int*, FILE*, pStruct*, int[256][2]);
+void checkFrames(int (*)[2]);
+
+void checkMessages(int (*)[19], int*, FILE*, pStruct*, int(*)[2]);
 
 void printMemMap(FILE*, int*, int*);
 
@@ -129,7 +132,7 @@ int main(int argc, char* argv[]){
 	pageStruct* pageTable;
 	pStruct* pBlock;
 	bool tableFull = 0;
-	int frameArray[30][32];
+	//int frameArray[30][32];
 	int lastForkTime[2];
 	int lastSecond;
 	int processIndex = 0;
@@ -138,12 +141,17 @@ int main(int argc, char* argv[]){
 		sysMem[i][0] = -1;
 		sysMem[i][1] = -1;
 	}
+
 	for(i = 0; i < 18; i++){
 		queue[i][0] = -1;
 		queue[i][1] = -1;
 		queue[i][2] = -1;
 	}
 	//=====================LOCAL VARIABLES
+
+	lastRequest[0] = -1;
+	lastRequest[1] = -1;
+	lastRequest[2] = -1;
 
 	//SIGNAL HANDLING
 	signal(SIGINT, clean);
@@ -161,11 +169,11 @@ int main(int argc, char* argv[]){
 	}
 
 	//OPTIONS===========================
-	if (argc != 1 && argc != 2){
+	if(argc != 1 && argc != 2){
 		fprintf(stderr, "%s Error: Incorrect number of arguments\n", argv[0]);
 		exit(1);
 	}
-	while ((option = getopt(argc, argv, "hv")) != -1){
+	while((option = getopt(argc, argv, "hv")) != -1){
 		switch (option){
 			case 'h':
 				printf("Usage: %s <-v>\n", argv[0]);
@@ -230,12 +238,14 @@ int main(int argc, char* argv[]){
 	memcpy(&shmMsg[18][1], &messageVal, 4);
 	memcpy(&shmMsg[18][2], &queueFrontVal, 4);
 	semctl(semid, 18, SETVAL, 1, arg);
-	sb.sem_op = 1;
-	sb.sem_num = 17;
+	sb.sem_op = 0;
 	sb.sem_flg = 0;
-	
-	for(sb.sem_num = 0; sb.sem_num < 19; sb.sem_num++)
+	for(sb.sem_num = 0; sb.sem_num < 18; sb.sem_num++)
 		semop(semid, &sb, 1);
+
+	sb.sem_op = 1;
+	sb.sem_num = 18;
+	semop(semid, &sb, 1);
 
 	if(errno){
 		fprintf(stderr, "....%s\n", strerror(errno));
@@ -249,7 +259,11 @@ int main(int argc, char* argv[]){
 	pid_t childpid;
 	srand(time(NULL));
 	
-	while(1){
+	while(lineCount < 1000){
+		if(errno){
+			fprintf(stderr, "aaa%s", strerror(errno));
+			clean(1);
+		}
 		if(processCount == MAX_PROCESSES){
 			for(i = 0; i < MAX_PROCESSES; i++){
 				if(clearProcess[i] == 1){
@@ -264,7 +278,10 @@ int main(int argc, char* argv[]){
 				}
 			}
 		}
-//		if((clock[0] - lastForkTime[0]) >= 1 || (clock[0] == lastForkTime[0] && clock[1] - lastForkTime[1] > 500000000)){
+
+		clock[0] = 1; //remove this
+
+		if((clock[0] - lastForkTime[0]) >= 1 || (clock[0] == lastForkTime[0] && clock[1] - lastForkTime[1] > 500000000)){
 			lastForkTime[0] = clock[0];
 			lastForkTime[1] = clock[1];
 			for(i = 0; i < MAX_PROCESSES; i++){
@@ -276,9 +293,13 @@ int main(int argc, char* argv[]){
 				tableFull = 1;
 			}
 			if(!tableFull){
+				if(errno){
+					fprintf(stderr, "eee%s", strerror(errno));
+					clean(1);
+				}
 				childpid = fork();
 				if(errno){
-					fprintf(stderr, "%s", strerror(errno));
+					fprintf(stderr, "qqq%s", strerror(errno));
 					clean(1);
 				}
 				if(childpid == 0){
@@ -298,7 +319,9 @@ int main(int argc, char* argv[]){
 					exit(1);
 				}
 			}
-//		}
+		}
+
+		checkFrames(sysMem);
 		checkMessages(shmMsg, clock, file, pBlock, sysMem);
 	
 		if(clock[0] > lastSecond){
@@ -314,64 +337,200 @@ int main(int argc, char* argv[]){
 	return 0;
 }
 
-void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, int sysMem[256][2]){
+void checkFrames(int (*sysMem)[2]){
+	int i, frameIndex;
+	for(i = 0; i < 256; i++){
+		if(sysMem[i][0] == -1){
+			frameIndex = i;
+			break;
+		}
+	}
+	if(frameIndex > 230)
+	//	daemon();
+	return;
+}
+
+void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, int (*sysMem)[2]){
 	int i;
 	bool pageFault = false;
+	int frameIndex = -1;
+
+	if(shmMsg[shmMsg[18][0]][0] == -1 || shmMsg[shmMsg[18][0]][2] == -1 || shmMsg[18][0] == -1 || (lastRequest[0] == shmMsg[shmMsg[18][0]][0] && lastRequest[1] == shmMsg[shmMsg[18][0]][1] && lastRequest[2] == shmMsg[shmMsg[18][0]][2]))
+		return;
+
 	for(i = 0; i < 256; i++){
-		if(sysMem[i][0] == shmMsg[0][0] && sysMem[i][1] == shmMsg[0][2]){
+		if(sysMem[i][0] == shmMsg[shmMsg[18][0]][0] && sysMem[i][1] == shmMsg[shmMsg[18][0]][2]){
 			break;
+		}
+		if(frameIndex == -1 && sysMem[i][0] == -1){
+			frameIndex = i;
 		}
 		pageFault = true;
 	}
-	if(shmMsg[0][1] == 0){ //read
-		if(!pageFault){
-			if(clock[1] + 10 > 1000000000){
-				clock[1] = (clock[1] + 10) % 1000000000;
-				clock[0]++;
-			}else{
-				clock[1] += 10;
-			}
-			if(verbose)
-				fprintf(file, "P%d is reading from page %d\n", shmMsg[0][0], shmMsg[0][2]);
-			shmMsg[0][0] = -1;
-			shmMsg[0][1] = -1;
-			shmMsg[0][2] = -1;
-			sb.sem_num = shmMsg[0][0];
-			semop(sharedmem[4], &sb, 1);
-		}else{
-			insert(shmMsg[0][0], shmMsg[0][2], 0);
-		}
-	}else if(shmMsg[0][1] == 1){ //write
-		printf("WRITE\n");
-		if(!pageFault){
-			if(clock[1] + 10 > 1000000000){
-				clock[1] = (clock[1] + 10) % 1000000000;
-				clock[0]++;
-			}else{
-				clock[1] += 10;
-			}
-			if(verbose)
-				fprintf(file, "P%d is writing to page %d\n", shmMsg[0][0], shmMsg[0][2]);
-			shmMsg[0][0] = -1;
-			shmMsg[0][1] = -1;
-			shmMsg[0][2] = -1;
-			sb.sem_num = shmMsg[0][0];
-			semop(sharedmem[4], &sb, 1);
-		}else{
-			insert(shmMsg[0][0], shmMsg[0][2], 1);
-		}
-	}else if(shmMsg[0][1] == 2){ //terminate
-		printf("TERMINATE\n");
-		fprintf(file, "Master has acknowledged P%d is terminating.\n", shmMsg[0][0]); //TODO: output memory access time
-		kill(pBlock[shmMsg[0][0]].pid, SIGKILL);
-		waitpid(pBlock[shmMsg[0][0]].pid, NULL, 0);
-		shmMsg[0][0] = -1;
-		shmMsg[0][1] = -1;
-		shmMsg[0][2] = -1;
-		sb.sem_num = shmMsg[0][0];
-		semop(sharedmem[4], &sb, 1);
-	}
 
+	lastRequest[0] = shmMsg[shmMsg[18][0]][0];
+	lastRequest[1] = shmMsg[shmMsg[18][0]][1];
+	lastRequest[2] = shmMsg[shmMsg[18][0]][2];
+
+	if(shmMsg[shmMsg[18][0]][1] == 0){ //read
+		if(!pageFault){
+			if(clock[1] + 10 > 1000000000){
+				clock[1] = (clock[1] + 10) % 1000000000;
+				clock[0]++;
+			}else{
+				clock[1] += 10;
+			}
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "bbb%s", strerror(errno));
+				clean(1);
+			}
+			if(verbose){
+				fprintf(file, "P%d is requesting reading from page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+				fprintf(file, "OSS did not detect a page fault and is granting P%d's request to read from page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+			}
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "ddd%s", strerror(errno));
+				clean(1);
+			}
+			sb.sem_num = shmMsg[shmMsg[18][0]][0];
+			sb.sem_op = 1;
+			semop(sharedmem[4], &sb, 1);
+		}else{
+			if(clock[1] + 15000000 > 1000000000){
+				clock[1] = (clock[1] + 15000000) % 1000000000;
+				clock[0]++;
+			}else{
+				clock[1] += 15000000;
+			}
+			sysMem[frameIndex][0] = shmMsg[shmMsg[18][0]][0];
+			sysMem[frameIndex][1] = shmMsg[shmMsg[18][0]][2];
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "eee%s", strerror(errno));
+				clean(1);
+			}
+			if(verbose){
+				fprintf(file, "P%d is requesting reading from page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+				fprintf(file, "OSS detected a page fault and is bringing the page into memory\n");
+				lineCount++;
+				fprintf(file, "OSS brought the page into memory and is granting P%d's request to read from page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+			}
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "fff%s", strerror(errno));
+				clean(1);
+			}
+			sb.sem_num = shmMsg[shmMsg[18][0]][0];
+			sb.sem_op = 1;
+			semop(sharedmem[4], &sb, 1);
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "ppp%s", strerror(errno));
+				clean(1);
+			}
+		}
+	}else if(shmMsg[shmMsg[18][0]][1] == 1){ //write
+		if(!pageFault){
+			if(clock[1] + 10 > 1000000000){
+				clock[1] = (clock[1] + 10) % 1000000000;
+				clock[0]++;
+			}else{
+				clock[1] += 10;
+			}
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "ggg%s", strerror(errno));
+				clean(1);
+			}
+			if(verbose){
+				fprintf(file, "P%d is requesting writing to page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+				fprintf(file, "OSS did not detect a page fault and is granting P%d's request to write to page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+			}
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "hhh%s", strerror(errno));
+				clean(1);
+			}
+			sb.sem_num = shmMsg[shmMsg[18][0]][0];
+			sb.sem_op = 1;
+			semop(sharedmem[4], &sb, 1);
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "ooo%s", strerror(errno));
+				clean(1);
+			}
+		}else{
+			if(clock[1] + 15000000 > 1000000000){
+				clock[1] = (clock[1] + 15000000) % 1000000000;
+				clock[0]++;
+			}else{
+				clock[1] += 15000000;
+			}
+			sysMem[frameIndex][0] = shmMsg[shmMsg[18][0]][0];
+			sysMem[frameIndex][1] = shmMsg[shmMsg[18][0]][2];
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "iii%s", strerror(errno));
+				clean(1);
+			}
+			if(verbose){
+				fprintf(file, "P%d is requesting writing to page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+				fprintf(file, "OSS detected a page fault and is bringing the page into memory\n");
+				lineCount++;
+				fprintf(file, "OSS brought the page into memory and is granting P%d's request to write to page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
+				lineCount++;
+			}
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "jjj%s", strerror(errno));
+				clean(1);
+			}
+			sb.sem_num = shmMsg[shmMsg[18][0]][0];
+			sb.sem_op = 1;
+			semop(sharedmem[4], &sb, 1);
+			if(errno){
+				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+				fprintf(stderr, "nnn%s", strerror(errno));
+				clean(1);
+			}
+		}
+	}else if(shmMsg[shmMsg[18][0]][1] == 2){ //terminate
+		if(errno){
+			printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+			fprintf(stderr, "kkk%s", strerror(errno));
+			clean(1);
+		}
+		fprintf(file, "Master has acknowledged P%d is terminating.\n", shmMsg[shmMsg[18][0]][0]); //TODO: output memory access time
+		if(errno){
+			printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+			fprintf(stderr, "lll%s", strerror(errno));
+			clean(1);
+		}
+		kill(pBlock[shmMsg[shmMsg[18][0]][0]].pid, SIGKILL);
+		waitpid(pBlock[shmMsg[shmMsg[18][0]][0]].pid, NULL, 0);
+		sb.sem_num = shmMsg[shmMsg[18][0]][0];
+		sb.sem_op = 1;
+		semop(sharedmem[4], &sb, 1);
+		if(errno){
+			printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+			fprintf(stderr, "mmm%s", strerror(errno));
+			clean(1);
+		}
+	}
+	if(errno){
+		printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
+		fprintf(stderr, "ccc%s", strerror(errno));
+		clean(1);
+	}
 	return;
 }
 
@@ -383,9 +542,10 @@ void printMemMap(FILE* file, int* bitFrameArray, int* bitFrameArray2){
 		else
 			fprintf(file, "D");
 	}
-	fprintf(file, "\n");
+	fprintf(file, "\n\n");
 	for(i = 0; i < 256; i++){	
-		fprintf(file, "%d", bitFrameArray2[i]);
+	//	fprintf(file, "%d", bitFrameArray2[i]);
 	}
+	fprintf(file, "\n\n");
 	return;
 }
