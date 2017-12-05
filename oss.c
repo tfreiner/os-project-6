@@ -41,6 +41,8 @@ int back = -1;
 bool verbose = false;
 int lineCount = 0;
 int lastRequest[3];
+int memAccess = 0;
+int pageFaultGlobal = 0;
 //==================GLOBAL VARIABLES
 
 //Semaphore union
@@ -84,18 +86,26 @@ void delete(){
 
 //Cleans all shared memory on exit
 void clean(int sig){
+	int i;
 	if(sig == 2)
 		fprintf(stderr, "Interrupt signaled. Removing shared memory and killing processes.\n");
 	else if(sig == 14)
 		fprintf(stderr, "Program reached 2 seconds. Removing shared memory and killing processes.\n");	
 	else if(sig == 11)
 		fprintf(stderr, "Seg fault caught. Removing shared memory and killing processes. Please re-run program.\n");
+	
+	for(i = 0; i < globalProcessCount; i++){
+		kill(processIds[i], SIGKILL);
+	}
 	shmctl(sharedmem[0], IPC_RMID, NULL);
 	shmctl(sharedmem[1], IPC_RMID, NULL);
 	shmctl(sharedmem[2], IPC_RMID, NULL);
 	shmctl(sharedmem[3], IPC_RMID, NULL);
 	semctl(sharedmem[4], 0, IPC_RMID);
-	
+	double avFault = pageFaultGlobal / (double)memAccess;
+	double avMemAccess = memAccess / (double)2;
+	printf("There was an average of %lf memory accesses per second.\n", avMemAccess);
+	printf("There was an average of %lf page faults per memory request.\n", avFault);
 	exit(1);
 }
 
@@ -113,11 +123,13 @@ bool checkBit(int bitArray[], int i){
 }
 //===================================Functions to handle bits
 
-void checkFrames(int (*)[2]);
+void checkFrames(int (*)[2], int*, int*);
 
-void checkMessages(int (*)[19], int*, FILE*, pStruct*, int(*)[2]);
+void daemonFunc(int (*)[2], int*, int*);
 
-void printMemMap(FILE*, int*, int*);
+void checkMessages(int (*)[19], int*, FILE*, pStruct*, int(*)[2], int*, int*);
+
+void printMemMap(FILE*, int*, int*, int(*)[2]);
 
 int main(int argc, char* argv[]){
 
@@ -237,8 +249,15 @@ int main(int argc, char* argv[]){
 	memcpy(&shmMsg[18][0], &queueFrontVal, 4);
 	memcpy(&shmMsg[18][1], &messageVal, 4);
 	memcpy(&shmMsg[18][2], &queueFrontVal, 4);
-	semctl(semid, 18, SETVAL, 1, arg);
-	sb.sem_op = 0;
+	for(i = 0; i < 19; i++){
+		semctl(semid, i, SETVAL, 1, arg);
+	}
+	if(errno){
+		fprintf(stderr, "!!!%s\n", strerror(errno));
+		clean(1);
+	}
+
+	sb.sem_op = 1;
 	sb.sem_flg = 0;
 	for(sb.sem_num = 0; sb.sem_num < 18; sb.sem_num++)
 		semop(semid, &sb, 1);
@@ -258,8 +277,7 @@ int main(int argc, char* argv[]){
 	lastSecond = clock[0];
 	pid_t childpid;
 	srand(time(NULL));
-	
-	while(lineCount < 1000){
+	while(lineCount < 1000000000){
 		if(errno){
 			fprintf(stderr, "aaa%s", strerror(errno));
 			clean(1);
@@ -267,6 +285,7 @@ int main(int argc, char* argv[]){
 		if(processCount == MAX_PROCESSES){
 			for(i = 0; i < MAX_PROCESSES; i++){
 				if(clearProcess[i] == 1){
+					//printf("AND AGAIN\n");
 					for(j = 0; j < MAX_PROCESSES; j++){
 						clearProcess[j] = 0;
 					}
@@ -279,9 +298,9 @@ int main(int argc, char* argv[]){
 			}
 		}
 
-		clock[0] = 1; //remove this
+		//clock[0] = 1; //remove this
 
-		if((clock[0] - lastForkTime[0]) >= 1 || (clock[0] == lastForkTime[0] && clock[1] - lastForkTime[1] > 500000000)){
+		//if((clock[0] - lastForkTime[0]) >= 1 || (clock[0] == lastForkTime[0] && clock[1] - lastForkTime[1] > 5)){ //500000000
 			lastForkTime[0] = clock[0];
 			lastForkTime[1] = clock[1];
 			for(i = 0; i < MAX_PROCESSES; i++){
@@ -319,14 +338,14 @@ int main(int argc, char* argv[]){
 					exit(1);
 				}
 			}
-		}
+		//}
 
-		checkFrames(sysMem);
-		checkMessages(shmMsg, clock, file, pBlock, sysMem);
+		checkFrames(sysMem, bitFrameArray, bitFrameArray2);
+		checkMessages(shmMsg, clock, file, pBlock, sysMem, bitFrameArray, bitFrameArray2);
 	
 		if(clock[0] > lastSecond){
 			lastSecond = clock[0];
-			printMemMap(file, bitFrameArray, bitFrameArray2);
+			printMemMap(file, bitFrameArray, bitFrameArray2, sysMem);
 		}
 	}
 
@@ -337,20 +356,35 @@ int main(int argc, char* argv[]){
 	return 0;
 }
 
-void checkFrames(int (*sysMem)[2]){
+void checkFrames(int (*sysMem)[2], int *bitFrameArray, int *bitFrameArray2){
 	int i, frameIndex;
 	for(i = 0; i < 256; i++){
-		if(sysMem[i][0] == -1){
+		if(sysMem[i][0] != -1){
 			frameIndex = i;
 			break;
 		}
 	}
 	if(frameIndex > 230)
-	//	daemon();
+		daemonFunc(sysMem, bitFrameArray, bitFrameArray2);
 	return;
 }
 
-void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, int (*sysMem)[2]){
+void daemonFunc(int (*sysMem)[2], int *bitFrameArray, int *bitFrameArray2){
+	int i;
+	for(i = 0; i < 256; i++){
+		if(sysMem[i][0] != - 1 && !checkBit(bitFrameArray2, i)){
+			sysMem[i][0] = -1;
+			sysMem[i][1] = -1;
+		}else if(checkBit(bitFrameArray2, i)){
+			unsetBit(bitFrameArray2, i);
+			setBit(bitFrameArray, i);
+		}
+	}
+
+	return;
+}
+
+void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, int (*sysMem)[2], int *bitFrameArray, int *bitFrameArray2){
 	int i;
 	bool pageFault = false;
 	int frameIndex = -1;
@@ -371,8 +405,9 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 	lastRequest[0] = shmMsg[shmMsg[18][0]][0];
 	lastRequest[1] = shmMsg[shmMsg[18][0]][1];
 	lastRequest[2] = shmMsg[shmMsg[18][0]][2];
-
+	
 	if(shmMsg[shmMsg[18][0]][1] == 0){ //read
+		memAccess++;
 		if(!pageFault){
 			if(clock[1] + 10 > 1000000000){
 				clock[1] = (clock[1] + 10) % 1000000000;
@@ -400,6 +435,7 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			sb.sem_op = 1;
 			semop(sharedmem[4], &sb, 1);
 		}else{
+			pageFaultGlobal++;
 			if(clock[1] + 15000000 > 1000000000){
 				clock[1] = (clock[1] + 15000000) % 1000000000;
 				clock[0]++;
@@ -408,6 +444,8 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			}
 			sysMem[frameIndex][0] = shmMsg[shmMsg[18][0]][0];
 			sysMem[frameIndex][1] = shmMsg[shmMsg[18][0]][2];
+			unsetBit(bitFrameArray, frameIndex);
+			setBit(bitFrameArray2, frameIndex);
 			if(errno){
 				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
 				fprintf(stderr, "eee%s", strerror(errno));
@@ -435,7 +473,10 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 				clean(1);
 			}
 		}
+		if(verbose)
+			printMemMap(file, bitFrameArray, bitFrameArray2, sysMem);
 	}else if(shmMsg[shmMsg[18][0]][1] == 1){ //write
+		memAccess++;
 		if(!pageFault){
 			if(clock[1] + 10 > 1000000000){
 				clock[1] = (clock[1] + 10) % 1000000000;
@@ -468,6 +509,7 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 				clean(1);
 			}
 		}else{
+			pageFaultGlobal++;
 			if(clock[1] + 15000000 > 1000000000){
 				clock[1] = (clock[1] + 15000000) % 1000000000;
 				clock[0]++;
@@ -476,6 +518,8 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			}
 			sysMem[frameIndex][0] = shmMsg[shmMsg[18][0]][0];
 			sysMem[frameIndex][1] = shmMsg[shmMsg[18][0]][2];
+			unsetBit(bitFrameArray, frameIndex);
+			setBit(bitFrameArray2, frameIndex);
 			if(errno){
 				printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
 				fprintf(stderr, "iii%s", strerror(errno));
@@ -503,6 +547,8 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 				clean(1);
 			}
 		}
+		if(verbose)
+			printMemMap(file, bitFrameArray, bitFrameArray2, sysMem);
 	}else if(shmMsg[shmMsg[18][0]][1] == 2){ //terminate
 		if(errno){
 			printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
@@ -515,6 +561,7 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			fprintf(stderr, "lll%s", strerror(errno));
 			clean(1);
 		}
+		clearProcess[shmMsg[shmMsg[18][0]][0]] = 1;
 		kill(pBlock[shmMsg[shmMsg[18][0]][0]].pid, SIGKILL);
 		waitpid(pBlock[shmMsg[shmMsg[18][0]][0]].pid, NULL, 0);
 		sb.sem_num = shmMsg[shmMsg[18][0]][0];
@@ -525,6 +572,8 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			fprintf(stderr, "mmm%s", strerror(errno));
 			clean(1);
 		}
+		if(verbose)
+			printMemMap(file, bitFrameArray, bitFrameArray2, sysMem);
 	}
 	if(errno){
 		printf("%d %d %d\n", sb.sem_num, shmMsg[shmMsg[18][0]][0], shmMsg[18][0]);
@@ -534,17 +583,24 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 	return;
 }
 
-void printMemMap(FILE* file, int* bitFrameArray, int* bitFrameArray2){
+void printMemMap(FILE* file, int* bitFrameArray, int* bitFrameArray2, int (*sysMem)[2]){
 	int i;
 	for(i = 0; i < 256; i++){
-		if(bitFrameArray[i] == 0)
+		if( sysMem[i][0] == -1)
+			fprintf(file, ".");
+		else if(!checkBit(bitFrameArray, i))
 			fprintf(file, "U");
 		else
 			fprintf(file, "D");
 	}
 	fprintf(file, "\n\n");
-	for(i = 0; i < 256; i++){	
-	//	fprintf(file, "%d", bitFrameArray2[i]);
+	for(i = 0; i < 256; i++){
+		if( sysMem[i][0] == -1)
+			fprintf(file, ".");
+		else if(checkBit(bitFrameArray2, i))
+			fprintf(file, "1");
+		else
+			fprintf(file, "0");	
 	}
 	fprintf(file, "\n\n");
 	return;

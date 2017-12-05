@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
- * Date: November 30th, 2017
- * Log: Fixing bugs
+ * Date: December 3rd, 2017
+ * Log: Setting up daemon
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,22 +54,13 @@ void delete(int (*shmMsg)[19]){
 int main(int argc, char* argv[]){
 
 	//LOCAL VARIABLES================================	
-	/*
-	FILE *file = fopen("log.txt", "a");
-	if(file == NULL){
-		fprintf(stderr, "%s: ", argv[0]);
-		perror("Error: \n");
-		exit(1);
-	}
-	*/
 	struct sembuf sb;
-	//pStruct* pBlock;
-	//pageStruct* pageTable;
 	srand(time(NULL) ^ (getpid()<<16));
 	int index = atoi(argv[1]);
 	int randFrameValue = rand() % 32;
 	int frame = 0; 
 	bool read = rand() % 2;
+	bool terminate = false;
 	int memoryReferences = 0;
 	int randTerminate = rand() % (1100 + 1 - 900) + 900;
 	//=================================LOCAL VARIABLES
@@ -91,14 +82,14 @@ int main(int argc, char* argv[]){
 		fprintf(stderr, "%s: ", argv[0]);
 		perror("Error: \n");
 	}
-	//int *clock = (int *)shmat(memid, NULL, 0);
-	//pageTable = (struct pageStruct *)shmat(memid2, NULL, 0);	
 	int (*shmMsg)[19] = shmat(memid3, NULL, 0);
-	//pBlock = (struct pStruct *)shmat(memid4, NULL, 0);
 	//====================================SHARED MEMORY
 	
-	while(memoryReferences < 10){
+	while(memoryReferences < randTerminate || !terminate){
+		if(memoryReferences >= randTerminate)
+			memoryReferences = 0;
 		read = rand() % 2;
+		terminate = rand() % 2;
 		randFrameValue = rand() % 32;
 		frame = (index+1) * randFrameValue * 1024;
 		if(read){
@@ -140,7 +131,19 @@ int main(int argc, char* argv[]){
 		}
 	}
 
-	//semop(semid, &sb, 1);
-	//insert(index, 2, frame, shmMsg);
-	exit(0);
+	sb.sem_op = -1;
+	sb.sem_num = 18;
+	semop(semid, &sb, 1);
+	
+	insert(index, 2, frame, shmMsg);
+	
+	sb.sem_op = 1;
+	sb.sem_num = 18;
+	semop(semid, &sb, 1);
+
+	sb.sem_op = -1;
+	sb.sem_num = index;
+	semop(semid, &sb, 1);
+	delete(shmMsg);
+	return 0;
 }
