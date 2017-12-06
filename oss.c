@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
  * Date: December 6th, 2017
- * Log: Finishing daemon
+ * Log: Finished
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +46,8 @@ int pageFaultGlobal = 0;
 int termProcs = 0;
 int second = 0;
 int daemonCount = 0;
+int tenns = 0;
+int fifteenms = 0;
 //==================GLOBAL VARIABLES
 
 //Semaphore union
@@ -74,13 +76,16 @@ void clean(int sig){
 	double avFault = pageFaultGlobal / (double)memAccess;
 	double avMemAccess = memAccess / (double)2;
 	double throughput = 0.0;
+	double memSpeed = tenns * 0.00001 + fifteenms / (double)memAccess;
 	if(second > 0)
 		throughput = termProcs / (double)second;
 	else
 		throughput = termProcs;
+	
 	printf("The daemon ran %d times\n", daemonCount);
 	printf("There was an average of %lf memory accesses per second.\n", avMemAccess);
 	printf("There was an average of %lf page faults per memory request.\n", avFault);
+	printf("The average memory access speed was %lf miliseconds.\n", memSpeed);
 	printf("Throughput: There was an average of %lf terminated processes per simulated second.\n", throughput);
 	exit(1);
 }
@@ -372,6 +377,7 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			}else{
 				clock[1] += 10;
 			}
+			tenns++;
 			second = clock[0];
 			if(verbose){
 				fprintf(file, "P%d is requesting reading from page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
@@ -390,6 +396,7 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			}else{
 				clock[1] += 15000000;
 			}
+			fifteenms++;
 			second = clock[0];
 			sysMem[frameIndex][0] = shmMsg[shmMsg[18][0]][0];
 			sysMem[frameIndex][1] = shmMsg[shmMsg[18][0]][2];
@@ -418,6 +425,7 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			}else{
 				clock[1] += 10;
 			}
+			tenns++;
 			second = clock[0];
 			if(verbose){
 				fprintf(file, "P%d is requesting writing to page %d\n", shmMsg[shmMsg[18][0]][0], shmMsg[shmMsg[18][0]][2]);
@@ -436,6 +444,7 @@ void checkMessages(int (*shmMsg)[19], int *clock, FILE* file, pStruct *pBlock, i
 			}else{
 				clock[1] += 15000000;
 			}
+			fifteenms++;
 			second = clock[0];
 			sysMem[frameIndex][0] = shmMsg[shmMsg[18][0]][0];
 			sysMem[frameIndex][1] = shmMsg[shmMsg[18][0]][2];

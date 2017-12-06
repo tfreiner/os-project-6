@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
  * Date: December 6th, 2017
- * Log: Finishing daemon
+ * Log: Finished
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,7 +63,6 @@ int main(int argc, char* argv[]){
 	bool terminate = false;
 	int memoryReferences = 0;
 	int randTerminate = rand() % (1100 + 1 - 900) + 900;
-
 	//=================================LOCAL VARIABLES
 	
 	//SHARED MEMORY===================================

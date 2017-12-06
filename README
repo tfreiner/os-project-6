@@ -1,0 +1,12 @@
+Taylor Freiner
+OS Project 6
+Repo. https://github.com/tfreiner/os-project-6
+
+This program uses an optional -v option for verbose logging, so to run this program, type 'make' to create the executables, and then type oss (or oss -v) to begin execution.
+
+This program runs for 2 seconds real time.
+
+There are 19 semaphores used to handle signaling between user and master.  Sempahores 1 - 18 are used to have user wait on its request to be fulfilled,
+and sempahore 19 is used to make sure that the user processes can't push to the message queue at the same time.
+
+It is very rare that the allocated frame count reaches 90% of the total frames, so I am running the daemon at 50% rather than 90% to make sure it is invoked.
