@@ -1,7 +1,7 @@
 /**
  * Author: Taylor Freiner
- * Date: December 3rd, 2017
- * Log: Setting up daemon
+ * Date: December 6th, 2017
+ * Log: Finishing daemon
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,6 +63,7 @@ int main(int argc, char* argv[]){
 	bool terminate = false;
 	int memoryReferences = 0;
 	int randTerminate = rand() % (1100 + 1 - 900) + 900;
+
 	//=================================LOCAL VARIABLES
 	
 	//SHARED MEMORY===================================
@@ -97,25 +98,26 @@ int main(int argc, char* argv[]){
 			sb.sem_num = 18;
 			semop(semid, &sb, 1);
 
-			insert(index, 1, frame, shmMsg);
-			
+			insert(index, 1, frame, shmMsg); // 1 -> read
+	
 			sb.sem_op = 1;
 			sb.sem_num = 18;
 			semop(semid, &sb, 1);
 
 			memoryReferences++;
-
+	
 			sb.sem_op = -1;
 			sb.sem_num = index;
 			sb.sem_flg = 0;
 			semop(semid, &sb, 1);
+	
 			delete(shmMsg);
 		}else{
 			sb.sem_op = -1;
 			sb.sem_num = 18;
 			semop(semid, &sb, 1);
 	
-			insert(index, 0, frame, shmMsg);
+			insert(index, 0, frame, shmMsg); // 0 -> write
 			
 			sb.sem_op = 1;
 			sb.sem_num = 18;
@@ -127,6 +129,7 @@ int main(int argc, char* argv[]){
 			sb.sem_num = index;
 			sb.sem_flg = 0;
 			semop(semid, &sb, 1);
+	
 			delete(shmMsg);
 		}
 	}
@@ -135,7 +138,7 @@ int main(int argc, char* argv[]){
 	sb.sem_num = 18;
 	semop(semid, &sb, 1);
 	
-	insert(index, 2, frame, shmMsg);
+	insert(index, 2, frame, shmMsg); // 2 -> terminate
 	
 	sb.sem_op = 1;
 	sb.sem_num = 18;
@@ -144,6 +147,7 @@ int main(int argc, char* argv[]){
 	sb.sem_op = -1;
 	sb.sem_num = index;
 	semop(semid, &sb, 1);
+	
 	delete(shmMsg);
 	return 0;
 }
